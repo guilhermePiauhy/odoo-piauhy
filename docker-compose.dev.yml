@@ -1,0 +1,78 @@
+version: "3.9"
+
+# =============================================================================
+# Odoo 17 Development Stack
+# Repository: guilhermePiauhy/odoo-piauhy
+#
+# Services: PostgreSQL 16 + Odoo 17
+# No reverse proxy — Odoo is directly accessible on port 8069.
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16
+  # ---------------------------------------------------------------------------
+  db:
+    image: postgres:16
+    container_name: odoo_dev_db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-odoo_dev}
+      POSTGRES_USER: ${POSTGRES_USER:-odoo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-odoo_dev_pass}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"   # Exposed for direct DB access (DBeaver, psql, etc.)
+    networks:
+      - dev_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-odoo} -d ${POSTGRES_DB:-odoo_dev}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # Odoo 17
+  # ---------------------------------------------------------------------------
+  odoo:
+    image: odoo:17
+    container_name: odoo_dev_app
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      HOST: db
+      PORT: 5432
+      USER: ${POSTGRES_USER:-odoo}
+      PASSWORD: ${POSTGRES_PASSWORD:-odoo_dev_pass}
+    volumes:
+      - odoo_dev_data:/var/lib/odoo
+      - ./config/odoo.conf:/etc/odoo/odoo.conf:ro
+      - ./addons:/mnt/extra-addons  # Writable in dev so scaffolded modules appear immediately
+    ports:
+      - "8069:8069"   # Web interface
+      - "8072:8072"   # Longpolling / live chat
+    networks:
+      - dev_network
+    # Development flags — enable verbose logging and developer mode.
+    command: odoo --dev=all --log-level=debug
+
+# =============================================================================
+# Named Volumes
+# =============================================================================
+volumes:
+  postgres_dev_data:
+    name: odoo_dev_postgres_data
+  odoo_dev_data:
+    name: odoo_dev_odoo_data
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  dev_network:
+    name: odoo_dev_network
+    driver: bridge

@@ -1,0 +1,116 @@
+version: "3.9"
+
+# =============================================================================
+# Odoo 17 Production Stack
+# Repository: guilhermePiauhy/odoo-piauhy
+#
+# Services: PostgreSQL 16 + Odoo 17 + Nginx (reverse proxy)
+# Networks: internal (db <-> odoo) + proxy (odoo <-> nginx)
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16
+  # ---------------------------------------------------------------------------
+  db:
+    image: postgres:16
+    container_name: odoo_prod_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # Odoo 17
+  # ---------------------------------------------------------------------------
+  odoo:
+    image: odoo:17
+    container_name: odoo_prod_app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      HOST: db
+      PORT: 5432
+      USER: ${POSTGRES_USER}
+      PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - odoo_data:/var/lib/odoo
+      - ./config/odoo.conf:/etc/odoo/odoo.conf:ro
+      - ./addons:/mnt/extra-addons:ro
+    networks:
+      - internal
+      - proxy
+    # Odoo is NOT exposed directly on the host in production.
+    # All traffic flows through Nginx.
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  # ---------------------------------------------------------------------------
+  # Nginx — Reverse Proxy
+  # ---------------------------------------------------------------------------
+  nginx:
+    image: nginx:alpine
+    container_name: odoo_prod_nginx
+    restart: unless-stopped
+    depends_on:
+      - odoo
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/odoo.conf:/etc/nginx/conf.d/odoo.conf:ro
+      # Mount your TLS certificates here when enabling HTTPS.
+      # Uncomment the two lines below and place certs in ./nginx/certs/
+      # - ./nginx/certs/fullchain.pem:/etc/ssl/certs/odoo.crt:ro
+      # - ./nginx/certs/privkey.pem:/etc/ssl/private/odoo.key:ro
+    networks:
+      - proxy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# =============================================================================
+# Named Volumes
+# =============================================================================
+volumes:
+  postgres_data:
+    name: odoo_prod_postgres_data
+  odoo_data:
+    name: odoo_prod_odoo_data
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  internal:
+    name: odoo_prod_internal
+    driver: bridge
+    internal: true   # No external access; only db <-> odoo
+  proxy:
+    name: odoo_prod_proxy
+    driver: bridge   # odoo <-> nginx, with nginx exposed to host
