@@ -1,0 +1,183 @@
+version: "3.8"
+
+services:
+  # ─────────────────────────────────────────────
+  # N8N – Orchestration / Monitoring Dashboard
+  # ─────────────────────────────────────────────
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_HOST=${N8N_HOST:-localhost}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=${N8N_PROTOCOL:-http}
+      - NODE_ENV=production
+      - WEBHOOK_URL=${WEBHOOK_URL:-http://localhost:5678/}
+      - N8N_BASIC_AUTH_ACTIVE=${N8N_BASIC_AUTH_ACTIVE:-true}
+      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER:-admin}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD:-changeme}
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-n8n}
+      - DB_POSTGRESDB_USER=${POSTGRES_USER:-n8n}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD:-n8n_secret}
+      - N8N_LOG_LEVEL=${N8N_LOG_LEVEL:-info}
+      - EXECUTIONS_PROCESS=main
+      - EXECUTIONS_DATA_SAVE_ON_ERROR=all
+      - EXECUTIONS_DATA_SAVE_ON_SUCCESS=all
+      - EXECUTIONS_DATA_SAVE_ON_PROGRESS=true
+      - EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS=true
+      - N8N_METRICS=true
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n/workflows:/home/node/.n8n/workflows
+      - ./n8n/credentials:/home/node/.n8n/credentials
+    networks:
+      - agent_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:5678/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ─────────────────────────────────────────────
+  # Agent Worker – Claude Code / AI Processing
+  # ─────────────────────────────────────────────
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    container_name: agent_worker
+    restart: unless-stopped
+    environment:
+      # Odoo
+      - ODOO_URL=${ODOO_URL:-https://mmp.intelligenti.com.br}
+      - ODOO_DB=${ODOO_DB:-mmp.intelligenti.com.br}
+      - ODOO_USER=${ODOO_USER:-chat.teste}
+      - ODOO_PASSWORD=${ODOO_PASSWORD:-@parada2024}
+      # AI / Claude
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-opus-4-5}
+      # Processing
+      - MAX_WORKERS=${MAX_WORKERS:-10}
+      - BATCH_SIZE=${BATCH_SIZE:-500}
+      - DATA_LIMITE_DIAS=${DATA_LIMITE_DIAS:-45}
+      - LIMITE_TOKENS_SENTENCA=${LIMITE_TOKENS_SENTENCA:-30000}
+      - LIMITE_TOKENS_ACORDAO=${LIMITE_TOKENS_ACORDAO:-20000}
+      - CSV_FILE=${CSV_FILE:-resultados_resultado_decisorio_final.csv}
+      - PROJETO_ALVO=${PROJETO_ALVO:-}
+      - GRUPO_ALVO=${GRUPO_ALVO:-}
+      # Debug
+      - DEBUG_MODE=${DEBUG_MODE:-false}
+      # Redis (task queue)
+      - REDIS_URL=redis://redis:6379/0
+      # Callback to N8N
+      - N8N_WEBHOOK_BASE_URL=http://n8n:5678/webhook
+      - N8N_WEBHOOK_TOKEN=${N8N_WEBHOOK_TOKEN:-}
+      # Healthcheck
+      - HEALTHCHECK_PORT=8080
+    volumes:
+      - ./app:/app
+      - ./libs:/app/libs
+      - agent_output:/app/output
+      - agent_logs:/app/logs
+    networks:
+      - agent_network
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      n8n:
+        condition: service_healthy
+    ports:
+      - "5679:5678"   # debugpy remote debug port
+      - "8080:8080"   # healthcheck
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # ─────────────────────────────────────────────
+  # API Gateway – Thin HTTP layer between N8N ↔ Agent
+  # ─────────────────────────────────────────────
+  api_gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: api_gateway
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - N8N_WEBHOOK_BASE_URL=http://n8n:5678/webhook
+      - N8N_WEBHOOK_TOKEN=${N8N_WEBHOOK_TOKEN:-}
+      - API_SECRET_KEY=${API_SECRET_KEY:-supersecretkey}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - POSTGRES_DSN=postgresql://${POSTGRES_USER:-n8n}:${POSTGRES_PASSWORD:-n8n_secret}@postgres:5432/${POSTGRES_DB:-n8n}
+    volumes:
+      - ./api:/app
+      - agent_output:/app/output:ro
+      - agent_logs:/app/logs:ro
+    networks:
+      - agent_network
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ─────────────────────────────────────────────
+  # Redis – Task Queue & Pub/Sub
+  # ─────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --save 60 1000
+      --loglevel notice
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - agent_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ─────────────────────────────────────────────
+  # PostgreSQL – Persistent store for N8N + audit logs
+  # ─────────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-n8n}
+      - POSTGRES_USER=${POSTGRES_USER:-n8n}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-n8n_
