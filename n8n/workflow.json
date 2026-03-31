@@ -1,0 +1,136 @@
+{
+  "name": "Claude Code Agent - Issue #2 Estrutura",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 */5 * * * *"
+            }
+          ]
+        }
+      },
+      "id": "trigger-schedule",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "claude-agent-webhook",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "trigger-webhook",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [240, 500],
+      "webhookId": "claude-agent-webhook"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "assign-repo",
+              "name": "repo",
+              "value": "guilhermePiauhy/odoo-piauhy",
+              "type": "string"
+            },
+            {
+              "id": "assign-issue",
+              "name": "issue_number",
+              "value": "2",
+              "type": "string"
+            },
+            {
+              "id": "assign-task",
+              "name": "task_description",
+              "value": "Implementar estrutura de agentes para análise de sentenças e acórdãos no Odoo. Criar dois agentes (Agente 1 e Agente 2) conforme especificação jurídica. Agente 1 analisa documentos e extrai resultado final do caso. Agente 2 classifica a natureza da obrigação material principal.",
+              "type": "string"
+            },
+            {
+              "id": "assign-branch",
+              "name": "branch",
+              "value": "feat/issue-2-estrutura-agentes",
+              "type": "string"
+            },
+            {
+              "id": "assign-workdir",
+              "name": "work_dir",
+              "value": "/workspace/odoo-piauhy",
+              "type": "string"
+            },
+            {
+              "id": "assign-run-id",
+              "name": "run_id",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-config",
+      "name": "Set Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [460, 400]
+    },
+    {
+      "parameters": {
+        "command": "echo '{\"status\":\"starting\",\"run_id\":\"{{ $json.run_id }}\",\"repo\":\"{{ $json.repo }}\",\"issue\":\"{{ $json.issue_number }}\",\"timestamp\":\"{{ $now.toISO() }}\"}'"
+      },
+      "id": "log-start",
+      "name": "Log Start",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [680, 400]
+    },
+    {
+      "parameters": {
+        "command": "#!/bin/bash\nset -e\n\nREPO=\"{{ $('Set Config').item.json.repo }}\"\nBRANCH=\"{{ $('Set Config').item.json.branch }}\"\nWORK_DIR=\"{{ $('Set Config').item.json.work_dir }}\"\n\necho \"[SETUP] Iniciando setup do ambiente - $(date)\"\n\n# Verificar se claude code CLI está disponível\nif ! command -v claude &> /dev/null; then\n  echo \"[SETUP] Claude Code CLI não encontrado, verificando npm...\"\n  if command -v npm &> /dev/null; then\n    npm install -g @anthropic-ai/claude-code 2>&1 || echo \"[WARN] Falha ao instalar claude-code via npm\"\n  else\n    echo \"[ERROR] npm não disponível\"\n    exit 1\n  fi\nfi\n\n# Verificar se git está disponível\nif ! command -v git &> /dev/null; then\n  echo \"[ERROR] git não encontrado\"\n  exit 1\nfi\n\n# Criar diretório de trabalho se necessário\nmkdir -p \"$(dirname $WORK_DIR)\"\n\n# Clonar ou atualizar repositório\nif [ -d \"$WORK_DIR/.git\" ]; then\n  echo \"[SETUP] Repositório já existe, atualizando...\"\n  cd \"$WORK_DIR\"\n  git fetch origin 2>&1\n  git checkout main 2>&1 || git checkout master 2>&1\n  git pull origin $(git rev-parse --abbrev-ref HEAD) 2>&1\nelse\n  echo \"[SETUP] Clonando repositório $REPO...\"\n  git clone \"https://github.com/$REPO.git\" \"$WORK_DIR\" 2>&1\n  cd \"$WORK_DIR\"\nfi\n\n# Criar ou trocar para branch de feature\ncd \"$WORK_DIR\"\nif git ls-remote --exit-code --heads origin \"$BRANCH\" &>/dev/null; then\n  echo \"[SETUP] Branch $BRANCH já existe no remote, fazendo checkout...\"\n  git checkout -B \"$BRANCH\" origin/\"$BRANCH\" 2>&1 || git checkout \"$BRANCH\" 2>&1\nelse\n  echo \"[SETUP] Criando nova branch $BRANCH...\"\n  git checkout -b \"$BRANCH\" 2>&1\nfi\n\necho \"[SETUP] Branch atual: $(git rev-parse --abbrev-ref HEAD)\"\necho \"[SETUP] Setup concluído com sucesso - $(date)\"\n"
+      },
+      "id": "setup-environment",
+      "name": "Setup Environment",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-exit-code",
+              "leftValue": "={{ $json.exitCode }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-setup",
+      "name": "Check Setup Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1120, 400]
+    },
+    {
+      "parameters": {
+        "command": "#!/bin/bash\nset -e\n\nWORK_DIR=\"{{ $('Set Config').item.json.work_dir }}\"\nTASK=\"{{ $('Set Config').item.json.task_description }}\"\nISSUE=\"{{ $('Set Config').item.json.issue_number }}\"\n\ncd \"$WORK_DIR\"\n\necho \"[AGENT] Iniciando Claude Code Agent - $(date)\"\necho \"[AGENT] Task: $TASK\"\necho \"[AGENT] Working dir: $WORK_DIR\"\n\n# Criar arquivo de prompt para o agente\ncat > /tmp/claude_prompt
